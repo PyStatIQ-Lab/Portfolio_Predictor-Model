@@ -181,7 +181,7 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
         weights = []
         
         for _, row in df.iterrows():
-            stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+            stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
             stock_returns = stock_data.pct_change().dropna()
             
             # Align dates between stock and market returns
@@ -206,7 +206,7 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
             # Calculate correlation with NSEI
             portfolio_returns = []
             for _, row in df.iterrows():
-                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
                 stock_returns = stock_data.pct_change().dropna()
                 common_dates = nsei_returns.index.intersection(stock_returns.index)
                 aligned_stock = stock_returns[common_dates]

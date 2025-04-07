@@ -64,7 +64,7 @@ with st.sidebar:
         mime="text/csv"
     )
 
-# Function to download historical data
+# Update the get_historical_data function
 def get_historical_data(symbols, period):
     period_map = {
         "3 months": "3mo",
@@ -78,12 +78,17 @@ def get_historical_data(symbols, period):
             symbols,
             period=period_map[period],
             interval="1d",
-            group_by='ticker'
+            group_by='ticker',
+            progress=False
         )
         
-        # For single stock case
+        # For single stock case, ensure consistent structure
         if len(symbols) == 1:
             data = {symbols[0]: data}
+        else:
+            # Ensure all symbols are present in the data
+            available_symbols = [col[0] for col in data.columns.levels[0]]
+            data = {sym: data[sym] for sym in symbols if sym in available_symbols}
         
         return data
     except Exception as e:
@@ -92,10 +97,25 @@ def get_historical_data(symbols, period):
 
 # Function to calculate beta and volatility
 def calculate_stock_metrics(stock_data, index_data):
+    # Ensure we're working with DataFrames
+    if isinstance(stock_data, pd.DataFrame):
+        stock_df = stock_data
+    else:
+        stock_df = stock_data.to_frame()
+    
+    if isinstance(index_data, pd.DataFrame):
+        index_df = index_data
+    else:
+        index_df = index_data.to_frame()
+    
+    # Find closing price columns (could be 'Close' or 'Adj Close')
+    stock_close_col = 'Adj Close' if 'Adj Close' in stock_df.columns else 'Close'
+    index_close_col = 'Adj Close' if 'Adj Close' in index_df.columns else 'Close'
+    
     # Merge stock and index data
     merged = pd.merge(
-        stock_data['Close'].rename('Stock'),
-        index_data['Close'].rename('Index'),
+        stock_df[stock_close_col].rename('Stock'),
+        index_df[index_close_col].rename('Index'),
         left_index=True,
         right_index=True,
         how='inner'

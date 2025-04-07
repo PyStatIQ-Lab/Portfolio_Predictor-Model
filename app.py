@@ -115,22 +115,26 @@ def calculate_portfolio_volatility(volatilities, weights, betas, nsei_volatility
     idiosyncratic_risk = sum((weights[stock] * volatilities[stock])**2 for stock in weights if stock in volatilities)
     return np.sqrt(systematic_risk**2 + idiosyncratic_risk)
 
-def format_numeric_columns(df):
-    """Format numeric columns for display"""
-    format_dict = {
-        'Avg. Cost Price': '{:,.2f}',
-        'LTP': '{:,.2f}',
-        'Invested value': '₹{:,.2f}',
-        'Market Value': '₹{:,.2f}',
-        'Unrealized P&L': '₹{:,.2f}',
-        'Unrealized P&L (%)': '{:.2f}%',
-        'Weight': '{:.2%}'
+def format_dataframe(df):
+    """Format DataFrame for display without using Series.format()"""
+    # Make a copy to avoid modifying the original
+    formatted_df = df.copy()
+    
+    # Define formatting rules
+    formatting = {
+        'Avg. Cost Price': lambda x: f"{x:,.2f}" if pd.notnull(x) else "",
+        'LTP': lambda x: f"{x:,.2f}" if pd.notnull(x) else "",
+        'Invested value': lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "",
+        'Market Value': lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "",
+        'Unrealized P&L': lambda x: f"₹{x:,.2f}" if pd.notnull(x) else "",
+        'Unrealized P&L (%)': lambda x: f"{x:.2f}%" if pd.notnull(x) else "",
+        'Weight': lambda x: f"{x:.2%}" if pd.notnull(x) else ""
     }
     
-    formatted_df = df.copy()
-    for col, fmt in format_dict.items():
-        if col in formatted_df.columns and pd.api.types.is_numeric_dtype(formatted_df[col]):
-            formatted_df[col] = formatted_df[col].apply(lambda x: fmt.format(x) if not pd.isna(x) else '')
+    # Apply formatting to each column that exists
+    for col, formatter in formatting.items():
+        if col in formatted_df.columns:
+            formatted_df[col] = formatted_df[col].apply(formatter)
     
     return formatted_df
 
@@ -225,7 +229,7 @@ if uploaded_file is not None:
                 st.write("### Individual Stock Betas")
                 beta_df = pd.DataFrame.from_dict(betas, orient='index', columns=['Beta'])
                 beta_df['Weight'] = beta_df.index.map(weights)
-                st.dataframe(format_numeric_columns(beta_df), use_container_width=True)
+                st.dataframe(format_dataframe(beta_df), use_container_width=True)
                 
                 # Prediction function with improved model
                 def predict_portfolio_value(target_nsei):
@@ -318,7 +322,7 @@ if uploaded_file is not None:
                 
                 # Show portfolio holdings
                 st.subheader("Your Portfolio Holdings")
-                st.dataframe(format_numeric_columns(df), use_container_width=True)
+                st.dataframe(format_dataframe(df), use_container_width=True)
             
             else:
                 st.error("Failed to download historical data. Please try again later.")

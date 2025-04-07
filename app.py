@@ -59,12 +59,12 @@ with st.sidebar:
 # Function to fetch historical data and calculate beta and volatility
 def get_stock_data(symbols, index_symbol="^NSEI", period="1y"):
     # Fetch Nifty 50 data
-    index_data = yf.download(index_symbol, period=period)['Adj Close']
+    index_data = yf.download(index_symbol, period=period)['Close']
     
     # Fetch stock data
     stock_data = {}
     for symbol in symbols:
-        stock_data[symbol] = yf.download(symbol, period=period)['Adj Close']
+        stock_data[symbol] = yf.download(symbol, period=period)['Close']
     
     # Calculate daily returns
     index_returns = index_data.pct_change().dropna()

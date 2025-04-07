@@ -68,7 +68,7 @@ with st.sidebar:
 def download_stock_data(tickers, start_date, end_date):
     """Download historical stock data using yfinance"""
     try:
-        data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
+        data = yf.download(tickers, start=start_date, end=end_date)['Close']
         return data
     except Exception as e:
         st.error(f"Error downloading data: {str(e)}")

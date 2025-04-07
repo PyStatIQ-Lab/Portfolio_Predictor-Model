@@ -95,7 +95,7 @@ def calculate_stock_metrics(stock_data, index_data):
     # Merge stock and index data
     merged = pd.merge(
         stock_data['Close'].rename('Stock'),
-        index_data['Adj Close'].rename('Index'),
+        index_data['Close'].rename('Index'),
         left_index=True,
         right_index=True,
         how='inner'

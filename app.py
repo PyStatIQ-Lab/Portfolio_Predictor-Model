@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 from io import BytesIO
+from scipy.optimize import fsolve
 
 # Set page config
 st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
@@ -38,11 +39,11 @@ with st.sidebar:
     sample_data = pd.DataFrame({
         'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS'],
         'Net Quantity': [30, 30, 3],
-        'Avg. Cost Price': [1397.1, 1680.92, 11145],
+        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],  # Changed to float
         'LTP': [575.8, 720.35, 4974.35],
-        'Invested value': [41913, 50427.60, 33435],
-        'Market Value': [17274, 21610.50, 14923.05],
-        'Unrealized P&L': [-24639, -28817.10, -18511.95],
+        'Invested value': [41913.0, 50427.60, 33435.0],  # Changed to float
+        'Market Value': [17274.0, 21610.50, 14923.05],  # Changed to float
+        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],  # Changed to float
         'Unrealized P&L (%)': [-58.79, -57.15, -55.37]
     })
     
@@ -73,16 +74,18 @@ if uploaded_file is not None:
             st.error(f"Missing required columns: {', '.join(missing)}")
             st.stop()
         
-        # Clean data
-        df = df.dropna(subset=required_cols)
-        for col in ['Invested value', 'Market Value', 'Unrealized P&L']:
-            if df[col].dtype == 'object':
-                df[col] = df[col].str.replace(',', '').astype(float)
+        # Clean data - ensure numerical columns are float type
+        num_cols = ['Avg. Cost Price', 'LTP', 'Invested value', 'Market Value', 'Unrealized P&L']
+        for col in num_cols:
+            if col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+                df[col] = df[col].astype(float)
         
         # Calculate portfolio metrics
-        portfolio_value = df['Market Value'].sum()
-        invested_value = df['Invested value'].sum()
-        unrealized_pnl = df['Unrealized P&L'].sum()
+        portfolio_value = float(df['Market Value'].sum())
+        invested_value = float(df['Invested value'].sum())
+        unrealized_pnl = float(df['Unrealized P&L'].sum())
         unrealized_pnl_pct = (unrealized_pnl / invested_value) * 100
         
         # Display portfolio summary
@@ -98,9 +101,8 @@ if uploaded_file is not None:
         st.subheader("Portfolio Sensitivity Analysis")
         
         # For beta calculation, we'll assume a relationship based on unrealized P&L%
-        # In a real app, you would use historical data for accurate beta
         avg_downside = df[df['Unrealized P&L (%)'] < 0]['Unrealized P&L (%)'].mean()
-        portfolio_beta = abs(avg_downside / 10)  # Assuming market dropped 10% to reach current P&L
+        portfolio_beta = float(abs(avg_downside / 10))  # Assuming market dropped 10% to reach current P&L
         
         st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
         st.caption("""
@@ -111,23 +113,20 @@ if uploaded_file is not None:
         
         # Prediction function
         def predict_portfolio_value(target_nsei):
+            target_nsei = float(target_nsei)
             nsei_return_pct = ((target_nsei - current_nsei) / current_nsei) * 100
             portfolio_return_pct = portfolio_beta * nsei_return_pct
             predicted_portfolio_value = portfolio_value * (1 + portfolio_return_pct/100)
             predicted_pnl_pct = ((predicted_portfolio_value - invested_value) / invested_value) * 100
-            return predicted_portfolio_value, predicted_pnl_pct
+            return float(predicted_portfolio_value), float(predicted_pnl_pct)
         
         # Find breakeven point
         def breakeven_equation(nsei_level):
-            port_value, _ = predict_portfolio_value(nsei_level)
+            port_value, _ = predict_portfolio_value(float(nsei_level[0]))
             return port_value - invested_value
         
         # Numerical solution for breakeven
-        from scipy.optimize import fsolve
-        breakeven_nsei = fsolve(
-            lambda x: breakeven_equation(x[0]), 
-            current_nsei
-        )[0]
+        breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
         
         # User input for prediction
         st.subheader("Portfolio Prediction")
@@ -138,7 +137,7 @@ if uploaded_file is not None:
                 "Enter target NSEI level for prediction:",
                 min_value=1000.0,
                 max_value=50000.0,
-                value=round(breakeven_nsei),
+                value=float(round(breakeven_nsei)),
                 step=100.0
             )
         
@@ -166,7 +165,7 @@ if uploaded_file is not None:
             current_nsei * 0.7, 
             current_nsei * 1.5, 
             50
-        )
+        ).astype(float)
         predicted_values = [predict_portfolio_value(n)[0] for n in nsei_range]
         predicted_pnls = [predict_portfolio_value(n)[1] for n in nsei_range]
         

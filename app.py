@@ -7,6 +7,7 @@ from io import BytesIO
 from scipy.optimize import fsolve
 import yfinance as yf
 from datetime import datetime, timedelta
+import os
 
 # Set page config
 st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
@@ -15,7 +16,7 @@ st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
 st.title("📈 Portfolio Performance Predictor Based on NSEI Levels")
 st.markdown("""
 Predict how your portfolio will perform at different NSEI (Nifty 50) index levels.
-Enter your stock holdings or upload a file to see predictions.
+Select your stocks and enter holdings to see predictions.
 """)
 
 # Function to calculate beta
@@ -25,14 +26,8 @@ def calculate_beta(stock_returns, market_returns):
     beta = covariance / market_variance
     return beta
 
-# Sidebar for input method selection
+# Sidebar for settings
 with st.sidebar:
-    st.header("Input Method")
-    input_method = st.radio(
-        "Choose how to input your portfolio:",
-        ("Manual Entry", "File Upload")
-    )
-    
     st.header("Settings")
     current_nsei = st.number_input(
         "Current NSEI Level",
@@ -42,8 +37,8 @@ with st.sidebar:
         step=100.0
     )
     
-    # Sample data download
-    st.markdown("### Need sample data?")
+    # Sample portfolio download
+    st.markdown("### Need sample portfolio?")
     sample_data = pd.DataFrame({
         'Symbol': ['RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS'],
         'Quantity': [10, 5, 8],
@@ -63,86 +58,151 @@ with st.sidebar:
 if 'portfolio_df' not in st.session_state:
     st.session_state.portfolio_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg. Cost Price', 'Current Price'])
 
-# Manual entry section
-if input_method == "Manual Entry":
-    st.subheader("Enter Your Stock Holdings")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        symbol = st.text_input("Stock Symbol (e.g., RELIANCE.NS)", key="sym_input")
-    with col2:
-        quantity = st.number_input("Quantity", min_value=1, step=1, key="qty_input")
-    with col3:
-        avg_cost = st.number_input("Avg. Cost Price (₹)", min_value=0.01, step=1.0, key="cost_input")
-    with col4:
-        current_price = st.number_input("Current Price (₹)", min_value=0.01, step=1.0, key="price_input")
-    
-    if st.button("Add to Portfolio"):
-        if symbol:
-            new_row = pd.DataFrame({
-                'Symbol': [symbol],
-                'Quantity': [quantity],
-                'Avg. Cost Price': [avg_cost],
-                'Current Price': [current_price]
-            })
-            st.session_state.portfolio_df = pd.concat([st.session_state.portfolio_df, new_row], ignore_index=True)
-            st.success(f"Added {symbol} to portfolio")
+# Load available stocks from Excel file
+@st.cache_data
+def load_available_stocks():
+    try:
+        # Check if stocks.xlsx exists in the root directory
+        if os.path.exists('stocks.xlsx'):
+            df = pd.read_excel('stocks.xlsx', header=None)
+            return df[0].tolist()
         else:
-            st.error("Please enter a stock symbol")
-    
-    if not st.session_state.portfolio_df.empty:
-        st.subheader("Your Current Portfolio")
-        st.dataframe(st.session_state.portfolio_df)
-        
-        if st.button("Clear Portfolio"):
-            st.session_state.portfolio_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg. Cost Price', 'Current Price'])
-            st.rerun()
-    
-    df = st.session_state.portfolio_df.copy()
+            st.warning("stocks.xlsx file not found in root directory. Using default stock list.")
+            return [
+                'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'HDFC.NS', 
+                'ICICIBANK.NS', 'HUL.NS', 'ITC.NS', 'KOTAKBANK.NS', 'SBIN.NS'
+            ]
+    except Exception as e:
+        st.error(f"Error loading stocks: {str(e)}")
+        return [
+            'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'HDFC.NS', 
+            'ICICIBANK.NS', 'HUL.NS', 'ITC.NS', 'KOTAKBANK.NS', 'SBIN.NS'
+        ]
 
-# File upload section
-else:
-    st.subheader("Upload Your Portfolio")
-    uploaded_file = st.file_uploader(
-        "Choose Excel/CSV file with portfolio data",
-        type=["csv", "xlsx"],
-        help="File should contain columns: Symbol, Quantity, Avg. Cost Price, Current Price"
+available_stocks = load_available_stocks()
+
+# Portfolio input section
+st.subheader("Build Your Portfolio")
+
+# File upload option
+uploaded_file = st.file_uploader(
+    "Or upload your portfolio file (CSV/Excel)",
+    type=["csv", "xlsx"],
+    help="File should contain columns: Symbol, Quantity, Avg. Cost Price"
+)
+
+if uploaded_file is not None:
+    try:
+        # Read the uploaded file
+        if uploaded_file.name.endswith('.csv'):
+            df = pd.read_csv(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
+        
+        # Check required columns
+        required_cols = ['Symbol', 'Quantity', 'Avg. Cost Price']
+        
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            st.error(f"Missing required columns: {', '.join(missing)}")
+            st.stop()
+        
+        # Clean data
+        num_cols = ['Quantity', 'Avg. Cost Price']
+        for col in num_cols:
+            if col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+                df[col] = df[col].astype(float)
+        
+        # Get current prices
+        try:
+            symbols = ' '.join(df['Symbol'].tolist())
+            data = yf.download(symbols, period="1d")['Close'].iloc[-1]
+            df['Current Price'] = df['Symbol'].map(data.to_dict())
+        except:
+            st.warning("Could not fetch current prices. Please enter manually.")
+            df['Current Price'] = np.nan
+        
+        st.session_state.portfolio_df = df[['Symbol', 'Quantity', 'Avg. Cost Price', 'Current Price']]
+        st.success("Portfolio uploaded successfully!")
+        
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+
+# Manual entry option
+st.markdown("### Or add stocks manually")
+
+col1, col2, col3, col4 = st.columns(4)
+with col1:
+    symbol = st.selectbox("Stock Symbol", available_stocks, key="sym_input")
+with col2:
+    quantity = st.number_input("Quantity", min_value=1, step=1, key="qty_input")
+with col3:
+    avg_cost = st.number_input("Avg. Cost Price (₹)", min_value=0.01, step=1.0, key="cost_input")
+with col4:
+    current_price = st.number_input("Current Price (₹)", min_value=0.01, step=1.0, key="price_input")
+
+if st.button("Add to Portfolio"):
+    if symbol:
+        new_row = pd.DataFrame({
+            'Symbol': [symbol],
+            'Quantity': [quantity],
+            'Avg. Cost Price': [avg_cost],
+            'Current Price': [current_price]
+        })
+        st.session_state.portfolio_df = pd.concat([st.session_state.portfolio_df, new_row], ignore_index=True)
+        st.success(f"Added {symbol} to portfolio")
+    else:
+        st.error("Please select a stock symbol")
+
+# Display current portfolio
+if not st.session_state.portfolio_df.empty:
+    st.subheader("Your Current Portfolio")
+    
+    # Allow editing of current prices
+    edited_df = st.data_editor(
+        st.session_state.portfolio_df,
+        num_rows="dynamic",
+        column_config={
+            "Symbol": st.column_config.SelectboxColumn(
+                "Symbol",
+                options=available_stocks,
+                required=True
+            ),
+            "Quantity": st.column_config.NumberColumn(
+                "Quantity",
+                min_value=1,
+                format="%d",
+                required=True
+            ),
+            "Avg. Cost Price": st.column_config.NumberColumn(
+                "Avg. Cost (₹)",
+                min_value=0.01,
+                format="%.2f",
+                required=True
+            ),
+            "Current Price": st.column_config.NumberColumn(
+                "Current Price (₹)",
+                min_value=0.01,
+                format="%.2f",
+                required=True
+            )
+        }
     )
     
-    if uploaded_file is not None:
-        try:
-            # Read the uploaded file
-            if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file)
-            else:
-                df = pd.read_excel(uploaded_file)
-            
-            # Check required columns
-            required_cols = ['Symbol', 'Quantity', 'Avg. Cost Price', 'Current Price']
-            
-            if not all(col in df.columns for col in required_cols):
-                missing = [col for col in required_cols if col not in df.columns]
-                st.error(f"Missing required columns: {', '.join(missing)}")
-                st.stop()
-            
-            # Clean data
-            num_cols = ['Quantity', 'Avg. Cost Price', 'Current Price']
-            for col in num_cols:
-                if col in df.columns:
-                    if df[col].dtype == 'object':
-                        df[col] = df[col].astype(str).str.replace(',', '').astype(float)
-                    df[col] = df[col].astype(float)
-        
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-            st.stop()
-
-# Calculate portfolio metrics if we have data
-if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state and not st.session_state.portfolio_df.empty):
-    if 'df' not in locals():
-        df = st.session_state.portfolio_df.copy()
+    # Update button
+    if st.button("Update Portfolio"):
+        st.session_state.portfolio_df = edited_df
+        st.success("Portfolio updated!")
     
-    # Calculate derived metrics
+    # Clear button
+    if st.button("Clear Portfolio"):
+        st.session_state.portfolio_df = pd.DataFrame(columns=['Symbol', 'Quantity', 'Avg. Cost Price', 'Current Price'])
+        st.rerun()
+    
+    # Calculate portfolio metrics
+    df = st.session_state.portfolio_df.copy()
     df['Invested Value'] = df['Quantity'] * df['Avg. Cost Price']
     df['Market Value'] = df['Quantity'] * df['Current Price']
     df['Unrealized P&L'] = df['Market Value'] - df['Invested Value']
@@ -181,18 +241,21 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
         weights = []
         
         for _, row in df.iterrows():
-            stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
-            stock_returns = stock_data.pct_change().dropna()
-            
-            # Align dates between stock and market returns
-            common_dates = nsei_returns.index.intersection(stock_returns.index)
-            aligned_market = nsei_returns[common_dates]
-            aligned_stock = stock_returns[common_dates]
-            
-            if len(aligned_stock) > 10:  # Minimum data points required
-                beta = calculate_beta(aligned_stock, aligned_market)
-                betas.append(beta)
-                weights.append(row['Market Value'] / portfolio_value)
+            try:
+                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
+                stock_returns = stock_data.pct_change().dropna()
+                
+                # Align dates between stock and market returns
+                common_dates = nsei_returns.index.intersection(stock_returns.index)
+                aligned_market = nsei_returns[common_dates]
+                aligned_stock = stock_returns[common_dates]
+                
+                if len(aligned_stock) > 10:  # Minimum data points required
+                    beta = calculate_beta(aligned_stock, aligned_market)
+                    betas.append(beta)
+                    weights.append(row['Market Value'] / portfolio_value)
+            except Exception as e:
+                st.warning(f"Could not calculate beta for {row['Symbol']}: {str(e)}")
         
         # Calculate weighted average portfolio beta
         if betas:
@@ -206,20 +269,23 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
             # Calculate correlation with NSEI
             portfolio_returns = []
             for _, row in df.iterrows():
-                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
-                stock_returns = stock_data.pct_change().dropna()
-                common_dates = nsei_returns.index.intersection(stock_returns.index)
-                aligned_stock = stock_returns[common_dates]
-                if len(portfolio_returns) == 0:
-                    portfolio_returns = aligned_stock * (row['Market Value'] / portfolio_value)
-                else:
-                    portfolio_returns += aligned_stock * (row['Market Value'] / portfolio_value)
+                try:
+                    stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
+                    stock_returns = stock_data.pct_change().dropna()
+                    common_dates = nsei_returns.index.intersection(stock_returns.index)
+                    aligned_stock = stock_returns[common_dates]
+                    if len(portfolio_returns) == 0:
+                        portfolio_returns = aligned_stock * (row['Market Value'] / portfolio_value)
+                    else:
+                        portfolio_returns += aligned_stock * (row['Market Value'] / portfolio_value)
+                except:
+                    continue
             
             correlation = np.corrcoef(portfolio_returns, nsei_returns[common_dates])[0, 1]
             st.write(f"Correlation with NSEI: {correlation:.2f}")
             
         else:
-            st.warning("Couldn't calculate beta for all stocks. Using simplified estimation.")
+            st.warning("Couldn't calculate beta for any stocks. Using simplified estimation.")
             avg_downside = df[df['Unrealized P&L %'] < 0]['Unrealized P&L %'].mean()
             portfolio_beta = float(abs(avg_downside / 10)) if avg_downside < 0 else 1.0
             st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
@@ -251,7 +317,10 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
         return port_value - invested_value
     
     # Numerical solution for breakeven
-    breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
+    try:
+        breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
+    except:
+        breakeven_nsei = current_nsei * (1 + (-unrealized_pnl_pct/100)/portfolio_beta)
     
     # User input for prediction
     st.subheader("Portfolio Prediction")
@@ -331,8 +400,8 @@ if ('df' in locals() and not df.empty) or ('portfolio_df' in st.session_state an
     }), use_container_width=True)
 
 else:
-    st.info("Please enter your stock holdings or upload a file to get started")
-    st.image("https://via.placeholder.com/800x400?text=Enter+your+stock+holdings+or+upload+a+file", use_column_width=True)
+    st.info("Please add stocks to your portfolio to get started")
+    st.image("https://via.placeholder.com/800x400?text=Add+stocks+to+your+portfolio", use_column_width=True)
 
 # Add some footer information
 st.markdown("---")

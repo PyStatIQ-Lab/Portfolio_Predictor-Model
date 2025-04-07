@@ -6,5 +6,4 @@ matplotlib
 scikit-learn
 yfinance
 seaborn
-stqdm
-xlsxwriter
+openpyxl

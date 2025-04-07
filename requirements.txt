@@ -7,3 +7,4 @@ scikit-learn
 yfinance
 seaborn
 stqdm
+xlsxwriter

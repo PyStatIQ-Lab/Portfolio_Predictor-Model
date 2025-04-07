@@ -227,78 +227,74 @@ if not st.session_state.portfolio_df.empty:
     # Fetch historical data for beta calculation
     st.subheader("Portfolio Sensitivity Analysis")
     
-try:
-    # Get historical data for stocks and NSEI
-    end_date = datetime.today()
-    start_date = end_date - timedelta(days=365)  # 1 year data
-    
-    # Download NSEI data
-    nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Close']
-    nsei_returns = nsei_data.pct_change().dropna()
-    
-    # Download all stocks at once for efficiency
-    symbols = ' '.join(df['Symbol'].tolist())
-    stock_data = yf.download(symbols, start=start_date, end=end_date, group_by='ticker')
-    
-    # Calculate beta for each stock
-    betas = []
-    weights = []
-    
-    for _, row in df.iterrows():
-        try:
-            # Get the stock's data
-            if row['Symbol'] in stock_data:
-                stock_prices = stock_data[row['Symbol']]['Close']
-                stock_returns = stock_prices.pct_change().dropna()
+    try:
+        # Get historical data for stocks and NSEI
+        end_date = datetime.today()
+        start_date = end_date - timedelta(days=365)  # 1 year data
+        
+        # Download NSEI data
+        nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Adj Close']
+        nsei_returns = nsei_data.pct_change().dropna()
+        
+        # Download stock data and calculate beta for each stock
+        betas = []
+        weights = []
+        
+        for _, row in df.iterrows():
+            try:
+                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+                stock_returns = stock_data.pct_change().dropna()
                 
                 # Align dates between stock and market returns
                 common_dates = nsei_returns.index.intersection(stock_returns.index)
-                if len(common_dates) > 10:  # Minimum data points required
-                    aligned_market = nsei_returns[common_dates]
-                    aligned_stock = stock_returns[common_dates]
-                    
+                aligned_market = nsei_returns[common_dates]
+                aligned_stock = stock_returns[common_dates]
+                
+                if len(aligned_stock) > 10:  # Minimum data points required
                     beta = calculate_beta(aligned_stock, aligned_market)
                     betas.append(beta)
                     weights.append(row['Market Value'] / portfolio_value)
-        except Exception as e:
-            st.warning(f"Could not calculate beta for {row['Symbol']}: {str(e)}")
-    
-    # Calculate weighted average portfolio beta
-    if betas:
-        portfolio_beta = np.average(betas, weights=weights)
-        st.write(f"Calculated Portfolio Beta: {portfolio_beta:.2f}")
+            except Exception as e:
+                st.warning(f"Could not calculate beta for {row['Symbol']}: {str(e)}")
         
-        # Calculate portfolio volatility (standard deviation)
-        portfolio_volatility = np.std(betas) * np.sqrt(252)  # Annualized
-        st.write(f"Portfolio Volatility (Annualized): {portfolio_volatility:.2%}")
-        
-        # Calculate correlation with NSEI
-        portfolio_returns = pd.Series(0, index=nsei_returns.index)
-        for i, (_, row) in enumerate(df.iterrows()):
-            try:
-                if row['Symbol'] in stock_data:
-                    stock_prices = stock_data[row['Symbol']]['Close']
-                    stock_returns = stock_prices.pct_change().dropna()
+        # Calculate weighted average portfolio beta
+        if betas:
+            portfolio_beta = np.average(betas, weights=weights)
+            st.write(f"Calculated Portfolio Beta: {portfolio_beta:.2f}")
+            
+            # Calculate portfolio volatility (standard deviation)
+            portfolio_volatility = np.std(betas) * np.sqrt(252)  # Annualized
+            st.write(f"Portfolio Volatility (Annualized): {portfolio_volatility:.2%}")
+            
+            # Calculate correlation with NSEI
+            portfolio_returns = []
+            for _, row in df.iterrows():
+                try:
+                    stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+                    stock_returns = stock_data.pct_change().dropna()
                     common_dates = nsei_returns.index.intersection(stock_returns.index)
-                    aligned_returns = stock_returns[common_dates]
-                    portfolio_returns[common_dates] += aligned_returns * weights[i]
-            except:
-                continue
+                    aligned_stock = stock_returns[common_dates]
+                    if len(portfolio_returns) == 0:
+                        portfolio_returns = aligned_stock * (row['Market Value'] / portfolio_value)
+                    else:
+                        portfolio_returns += aligned_stock * (row['Market Value'] / portfolio_value)
+                except:
+                    continue
+            
+            correlation = np.corrcoef(portfolio_returns, nsei_returns[common_dates])[0, 1]
+            st.write(f"Correlation with NSEI: {correlation:.2f}")
+            
+        else:
+            st.warning("Couldn't calculate beta for any stocks. Using simplified estimation.")
+            avg_downside = df[df['Unrealized P&L %'] < 0]['Unrealized P&L %'].mean()
+            portfolio_beta = float(abs(avg_downside / 10)) if avg_downside < 0 else 1.0
+            st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
         
-        correlation = np.corrcoef(portfolio_returns.dropna(), nsei_returns[portfolio_returns.dropna().index])[0, 1]
-        st.write(f"Correlation with NSEI: {correlation:.2f}")
-        
-    else:
-        st.warning("Couldn't calculate beta for any stocks. Using simplified estimation.")
+    except Exception as e:
+        st.warning(f"Couldn't fetch historical data: {str(e)}. Using simplified beta estimation.")
         avg_downside = df[df['Unrealized P&L %'] < 0]['Unrealized P&L %'].mean()
         portfolio_beta = float(abs(avg_downside / 10)) if avg_downside < 0 else 1.0
         st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
-
-except Exception as e:
-    st.warning(f"Couldn't fetch historical data: {str(e)}. Using simplified beta estimation.")
-    avg_downside = df[df['Unrealized P&L %'] < 0]['Unrealized P&L %'].mean()
-    portfolio_beta = float(abs(avg_downside / 10)) if avg_downside < 0 else 1.0
-    st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
     
     st.caption("""
     - Beta measures your portfolio's sensitivity to NSEI movements. 

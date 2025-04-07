@@ -227,7 +227,7 @@ if not st.session_state.portfolio_df.empty:
     # Fetch historical data for beta calculation
     st.subheader("Portfolio Sensitivity Analysis")
     
-    try:
+try:
     # Get historical data for stocks and NSEI
     end_date = datetime.today()
     start_date = end_date - timedelta(days=365)  # 1 year data

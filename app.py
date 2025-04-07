@@ -94,7 +94,7 @@ def get_historical_data(symbols, period):
 def calculate_stock_metrics(stock_data, index_data):
     # Merge stock and index data
     merged = pd.merge(
-        stock_data['Adj Close'].rename('Stock'),
+        stock_data['Close'].rename('Stock'),
         index_data['Adj Close'].rename('Index'),
         left_index=True,
         right_index=True,

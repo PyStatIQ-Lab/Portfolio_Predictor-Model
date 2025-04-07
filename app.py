@@ -233,7 +233,7 @@ try:
     start_date = end_date - timedelta(days=365)  # 1 year data
     
     # Download NSEI data
-    nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Adj Close']
+    nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Close']
     nsei_returns = nsei_data.pct_change().dropna()
     
     # Download all stocks at once for efficiency
@@ -248,7 +248,7 @@ try:
         try:
             # Get the stock's data
             if row['Symbol'] in stock_data:
-                stock_prices = stock_data[row['Symbol']]['Adj Close']
+                stock_prices = stock_data[row['Symbol']]['Close']
                 stock_returns = stock_prices.pct_change().dropna()
                 
                 # Align dates between stock and market returns
@@ -277,7 +277,7 @@ try:
         for i, (_, row) in enumerate(df.iterrows()):
             try:
                 if row['Symbol'] in stock_data:
-                    stock_prices = stock_data[row['Symbol']]['Adj Close']
+                    stock_prices = stock_data[row['Symbol']]['Close']
                     stock_returns = stock_prices.pct_change().dropna()
                     common_dates = nsei_returns.index.intersection(stock_returns.index)
                     aligned_returns = stock_returns[common_dates]

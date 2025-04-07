@@ -1,11 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import yfinance as yf
 from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 from io import BytesIO
 from scipy.optimize import fsolve
+import yfinance as yf
+from datetime import datetime, timedelta
 
 # Set page config
 st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
@@ -35,16 +36,24 @@ with st.sidebar:
         step=100.0
     )
     
+    lookback_days = st.slider(
+        "Lookback period for beta calculation (days)",
+        min_value=30,
+        max_value=365,
+        value=90,
+        help="Longer periods provide more stable beta estimates but may not capture recent changes"
+    )
+    
     # Sample data download
     st.markdown("### Need sample data?")
     sample_data = pd.DataFrame({
         'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS'],
         'Net Quantity': [30, 30, 3],
-        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],  # Changed to float
+        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],
         'LTP': [575.8, 720.35, 4974.35],
-        'Invested value': [41913.0, 50427.60, 33435.0],  # Changed to float
-        'Market Value': [17274.0, 21610.50, 14923.05],  # Changed to float
-        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],  # Changed to float
+        'Invested value': [41913.0, 50427.60, 33435.0],
+        'Market Value': [17274.0, 21610.50, 14923.05],
+        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],
         'Unrealized P&L (%)': [-58.79, -57.15, -55.37]
     })
     
@@ -56,22 +65,55 @@ with st.sidebar:
         mime="text/csv"
     )
 
-# Function to fetch historical data and calculate beta and volatility
-def get_stock_data(symbols, index_symbol="^NSEI", period="1y"):
-    # Fetch Nifty 50 data
-    index_data = yf.download(index_symbol, period=period)['Close']
+def download_stock_data(tickers, start_date, end_date):
+    """Download historical stock data using yfinance"""
+    try:
+        data = yf.download(tickers, start=start_date, end=end_date)['Adj Close']
+        return data
+    except Exception as e:
+        st.error(f"Error downloading data: {str(e)}")
+        return None
+
+def calculate_beta_and_volatility(portfolio_data, nsei_data):
+    """Calculate beta and volatility for each stock and portfolio"""
+    # Calculate daily returns
+    portfolio_returns = portfolio_data.pct_change().dropna()
+    nsei_returns = nsei_data.pct_change().dropna()
     
-    # Fetch stock data
-    stock_data = {}
-    for symbol in symbols:
-        stock_data[symbol] = yf.download(symbol, period=period)['Close']
+    # Align the dates
+    common_dates = portfolio_returns.index.intersection(nsei_returns.index)
+    portfolio_returns = portfolio_returns.loc[common_dates]
+    nsei_returns = nsei_returns.loc[common_dates]
     
-    # Align stock and index data by date
-    aligned_data = {}
-    for symbol, stock_df in stock_data.items():
-        aligned_data[symbol] = pd.concat([stock_df, index_data], axis=1).dropna()
+    # Calculate beta for each stock
+    betas = {}
+    volatilities = {}
+    for stock in portfolio_returns.columns:
+        X = nsei_returns.values.reshape(-1, 1)
+        y = portfolio_returns[stock].values
+        
+        model = LinearRegression()
+        model.fit(X, y)
+        betas[stock] = model.coef_[0]
+        
+        # Calculate annualized volatility
+        volatilities[stock] = portfolio_returns[stock].std() * np.sqrt(252)
     
-    return aligned_data
+    return betas, volatilities
+
+def calculate_portfolio_beta(betas, weights):
+    """Calculate weighted portfolio beta"""
+    portfolio_beta = 0
+    for stock, beta in betas.items():
+        portfolio_beta += beta * weights[stock]
+    return portfolio_beta
+
+def calculate_portfolio_volatility(volatilities, weights, betas, nsei_volatility):
+    """Calculate portfolio volatility considering market correlation"""
+    # This is a simplified approach - for more accuracy you'd need the full covariance matrix
+    systematic_risk = sum(betas[stock] * weights[stock] for stock in weights) * nsei_volatility
+    idiosyncratic_risk = sum((weights[stock] * volatilities[stock])**2 for stock in weights if stock in volatilities)
+    return np.sqrt(systematic_risk**2 + idiosyncratic_risk)
 
 # Main content
 if uploaded_file is not None:
@@ -100,12 +142,13 @@ if uploaded_file is not None:
                     df[col] = df[col].astype(str).str.replace(',', '').astype(float)
                 df[col] = df[col].astype(float)
         
-        # Portfolio summary
+        # Calculate portfolio metrics
         portfolio_value = float(df['Market Value'].sum())
         invested_value = float(df['Invested value'].sum())
         unrealized_pnl = float(df['Unrealized P&L'].sum())
         unrealized_pnl_pct = (unrealized_pnl / invested_value) * 100
         
+        # Display portfolio summary
         col1, col2, col3 = st.columns(3)
         col1.metric("Current Portfolio Value", f"₹{portfolio_value:,.2f}")
         col2.metric("Invested Value", f"₹{invested_value:,.2f}")
@@ -114,140 +157,164 @@ if uploaded_file is not None:
                    f"{unrealized_pnl_pct:.2f}%",
                    delta_color="inverse")
         
-        # Fetch stock data and calculate beta & volatility
-        symbols = df['Symbol'].tolist()
-        aligned_data = get_stock_data(symbols)
+        # Calculate weights for each stock
+        df['Weight'] = df['Market Value'] / portfolio_value
+        weights = dict(zip(df['Symbol'], df['Weight']))
         
-        # Calculate Beta and Volatility for each stock
-        betas = {}
-        volatilities = {}
-        for symbol, data in aligned_data.items():
-            stock_returns = data[symbol].pct_change().dropna()
-            index_returns = data['^NSEI'].pct_change().dropna()
-
-            # Ensure both series are of same length
-            min_len = min(len(stock_returns), len(index_returns))
-            stock_returns = stock_returns[:min_len]
-            index_returns = index_returns[:min_len]
+        # Download historical data
+        st.subheader("Portfolio Sensitivity Analysis")
+        with st.spinner("Downloading historical data and calculating beta..."):
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=lookback_days)
             
-            # Calculate beta and volatility
-            covariance = np.cov(stock_returns, index_returns)[0, 1]
-            index_variance = np.var(index_returns)
-            beta = covariance / index_variance
-            volatility = np.std(stock_returns)
+            # Get NSEI data
+            nsei_data = download_stock_data('^NSEI', start_date, end_date)
             
-            betas[symbol] = beta
-            volatilities[symbol] = volatility
-        
-        # Display Beta and Volatility
-        st.subheader("Stock Beta and Volatility")
-        beta_df = pd.DataFrame({
-            "Symbol": symbols,
-            "Beta": [betas[symbol] for symbol in symbols],
-            "Volatility": [volatilities[symbol] for symbol in symbols]
-        })
-        st.dataframe(beta_df)
-        
-        # Calculate portfolio beta (weighted average)
-        portfolio_beta = sum(df['Net Quantity'] * df['LTP'] * np.array([betas[symbol] for symbol in df['Symbol']])) / invested_value
-        st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
-        
-        # Prediction function
-        def predict_portfolio_value(target_nsei):
-            target_nsei = float(target_nsei)
-            nsei_return_pct = ((target_nsei - current_nsei) / current_nsei) * 100
-            portfolio_return_pct = portfolio_beta * nsei_return_pct
-            predicted_portfolio_value = portfolio_value * (1 + portfolio_return_pct/100)
-            predicted_pnl_pct = ((predicted_portfolio_value - invested_value) / invested_value) * 100
-            return float(predicted_portfolio_value), float(predicted_pnl_pct)
-        
-        # Find breakeven point
-        def breakeven_equation(nsei_level):
-            port_value, _ = predict_portfolio_value(float(nsei_level[0]))
-            return port_value - invested_value
-        
-        # Numerical solution for breakeven
-        breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
-        
-        # User input for prediction
-        st.subheader("Portfolio Prediction")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            target_nsei = st.number_input(
-                "Enter target NSEI level for prediction:",
-                min_value=1000.0,
-                max_value=50000.0,
-                value=float(round(breakeven_nsei)),
-                step=100.0
-            )
-        
-        if st.button("Predict Portfolio Value"):
-            pred_value, pred_pnl = predict_portfolio_value(target_nsei)
+            # Get portfolio stocks data
+            tickers = list(df['Symbol'].unique())
+            portfolio_data = download_stock_data(tickers, start_date, end_date)
             
-            col1, col2 = st.columns(2)
-            col1.metric(
-                f"Predicted Portfolio Value at NSEI {target_nsei:,.0f}",
-                f"₹{pred_value:,.2f}",
-                f"{(pred_value - portfolio_value)/portfolio_value*100:.2f}% from current"
-            )
-            col2.metric(
-                "Predicted Unrealized P&L",
-                f"₹{pred_value - invested_value:,.2f}",
-                f"{pred_pnl:.2f}%",
-                delta_color="inverse" if pred_pnl < 0 else "normal"
-            )
+            if portfolio_data is not None and nsei_data is not None:
+                # Calculate beta and volatility for each stock
+                betas, volatilities = calculate_beta_and_volatility(portfolio_data, nsei_data)
+                
+                # Calculate NSEI volatility (annualized)
+                nsei_volatility = nsei_data.pct_change().std() * np.sqrt(252)
+                
+                # Calculate portfolio beta
+                portfolio_beta = calculate_portfolio_beta(betas, weights)
+                
+                # Calculate portfolio volatility
+                portfolio_volatility = calculate_portfolio_volatility(volatilities, weights, betas, nsei_volatility)
+                
+                # Display results
+                col1, col2 = st.columns(2)
+                col1.metric("Portfolio Beta", f"{portfolio_beta:.2f}")
+                col1.caption("""
+                Beta measures your portfolio's sensitivity to NSEI movements. 
+                A beta of 1 means your portfolio moves with the market. 
+                Higher beta means more volatile than market.
+                """)
+                
+                col2.metric("Portfolio Volatility (Annualized)", f"{portfolio_volatility*100:.2f}%")
+                col2.caption("""
+                Volatility measures how much your portfolio's returns fluctuate over time.
+                Higher volatility means higher risk.
+                """)
+                
+                # Show beta for individual stocks
+                st.write("### Individual Stock Betas")
+                beta_df = pd.DataFrame.from_dict(betas, orient='index', columns=['Beta'])
+                beta_df['Weight'] = beta_df.index.map(weights)
+                st.dataframe(beta_df.style.format({'Beta': '{:.2f}', 'Weight': '{:.2%}'}))
+                
+                # Prediction function with improved model
+                def predict_portfolio_value(target_nsei):
+                    target_nsei = float(target_nsei)
+                    nsei_return_pct = ((target_nsei - current_nsei) / current_nsei) * 100
+                    
+                    # Use CAPM model: Expected Return = Risk Free Rate + Beta * (Market Return - Risk Free Rate)
+                    # For simplicity, we'll assume risk free rate is 0 here
+                    portfolio_return_pct = portfolio_beta * nsei_return_pct
+                    
+                    predicted_portfolio_value = portfolio_value * (1 + portfolio_return_pct/100)
+                    predicted_pnl_pct = ((predicted_portfolio_value - invested_value) / invested_value) * 100
+                    return float(predicted_portfolio_value), float(predicted_pnl_pct)
+                
+                # Find breakeven point
+                def breakeven_equation(nsei_level):
+                    port_value, _ = predict_portfolio_value(float(nsei_level[0]))
+                    return port_value - invested_value
+                
+                # Numerical solution for breakeven
+                breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
+                
+                # User input for prediction
+                st.subheader("Portfolio Prediction")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    target_nsei = st.number_input(
+                        "Enter target NSEI level for prediction:",
+                        min_value=1000.0,
+                        max_value=50000.0,
+                        value=float(round(breakeven_nsei)),
+                        step=100.0
+                    )
+                
+                if st.button("Predict Portfolio Value"):
+                    pred_value, pred_pnl = predict_portfolio_value(target_nsei)
+                    
+                    col1, col2 = st.columns(2)
+                    col1.metric(
+                        f"Predicted Portfolio Value at NSEI {target_nsei:,.0f}",
+                        f"₹{pred_value:,.2f}",
+                        f"{(pred_value - portfolio_value)/portfolio_value*100:.2f}% from current"
+                    )
+                    col2.metric(
+                        "Predicted Unrealized P&L",
+                        f"₹{pred_value - invested_value:,.2f}",
+                        f"{pred_pnl:.2f}%",
+                        delta_color="inverse" if pred_pnl < 0 else "normal"
+                    )
+                    
+                    st.success(f"Your portfolio will break even at NSEI {breakeven_nsei:,.2f} ({(breakeven_nsei - current_nsei)/current_nsei * 100:.2f}% from current)")
+                
+                # Generate predictions for visualization
+                st.subheader("Portfolio Projections")
+                nsei_range = np.linspace(
+                    current_nsei * 0.7, 
+                    current_nsei * 1.5, 
+                    50
+                ).astype(float)
+                predicted_values = [predict_portfolio_value(n)[0] for n in nsei_range]
+                predicted_pnls = [predict_portfolio_value(n)[1] for n in nsei_range]
+                
+                # Create figure
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+                
+                # Portfolio value plot
+                ax1.plot(nsei_range, predicted_values, color='blue')
+                ax1.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
+                ax1.axhline(y=invested_value, color='green', linestyle='--', label='Invested Value')
+                ax1.axvline(x=breakeven_nsei, color='purple', linestyle=':', label='Breakeven NSEI')
+                ax1.set_xlabel('NSEI Level')
+                ax1.set_ylabel('Portfolio Value (₹)')
+                ax1.set_title('Portfolio Value vs NSEI Level')
+                ax1.legend()
+                ax1.grid(True)
+                
+                # P&L percentage plot
+                ax2.plot(nsei_range, predicted_pnls, color='orange')
+                ax2.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
+                ax2.axhline(y=0, color='green', linestyle='--', label='Breakeven')
+                ax2.axvline(x=breakeven_nsei, color='purple', linestyle=':', label='Breakeven NSEI')
+                ax2.set_xlabel('NSEI Level')
+                ax2.set_ylabel('Unrealized P&L (%)')
+                ax2.set_title('Portfolio P&L % vs NSEI Level')
+                ax2.legend()
+                ax2.grid(True)
+                
+                st.pyplot(fig)
+                
+                # Show portfolio holdings
+                st.subheader("Your Portfolio Holdings")
+                st.dataframe(df.style.format({
+                    'Avg. Cost Price': '{:.2f}',
+                    'LTP': '{:.2f}',
+                    'Invested value': '₹{:,.2f}',
+                    'Market Value': '₹{:,.2f}',
+                    'Unrealized P&L': '₹{:,.2f}',
+                    'Unrealized P&L (%)': '{:.2f}%',
+                    'Weight': '{:.2%}'
+                }), use_container_width=True)
             
-            st.success(f"Your portfolio will break even at NSEI {breakeven_nsei:,.2f} ({(breakeven_nsei - current_nsei)/current_nsei * 100:.2f}% from current)")
-        
-        # Generate predictions for visualization
-        st.subheader("Portfolio Projections")
-        nsei_range = np.linspace(
-            current_nsei * 0.7, 
-            current_nsei * 1.5, 
-            50
-        ).astype(float)
-        predicted_values = [predict_portfolio_value(n)[0] for n in nsei_range]
-        predicted_pnls = [predict_portfolio_value(n)[1] for n in nsei_range]
-        
-        # Create figure
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-        
-        # Portfolio value plot
-        ax1.plot(nsei_range, predicted_values, color='blue')
-        ax1.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
-        ax1.axhline(y=invested_value, color='green', linestyle='--', label='Invested Value')
-        ax1.set_xlabel('NSEI Level')
-        ax1.set_ylabel('Portfolio Value (₹)')
-        ax1.set_title('Portfolio Value vs NSEI Level')
-        ax1.legend()
-        ax1.grid(True)
-        
-        # P&L percentage plot
-        ax2.plot(nsei_range, predicted_pnls, color='orange')
-        ax2.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
-        ax2.axhline(y=0, color='green', linestyle='--', label='Breakeven')
-        ax2.set_xlabel('NSEI Level')
-        ax2.set_ylabel('Unrealized P&L (%)')
-        ax2.set_title('Portfolio P&L % vs NSEI Level')
-        ax2.legend()
-        ax2.grid(True)
-        
-        st.pyplot(fig)
-        
-        # Show portfolio holdings
-        st.subheader("Your Portfolio Holdings")
-        st.dataframe(df.style.format({
-            'Avg. Cost Price': '{:.2f}',
-            'LTP': '{:.2f}',
-            'Invested value': '₹{:,.2f}',
-            'Market Value': '₹{:,.2f}',
-            'Unrealized P&L': '₹{:,.2f}',
-            'Unrealized P&L (%)': '{:.2f}%'
-        }), use_container_width=True)
+            else:
+                st.error("Failed to download historical data. Please try again later.")
     
     except Exception as e:
         st.error(f"Error processing file: {str(e)}")
+        st.error("Please check your file format and try again.")
 else:
     st.info("Please upload your portfolio file to get started")
     st.image("https://via.placeholder.com/800x400?text=Upload+your+portfolio+CSV/Excel+file", use_column_width=True)
@@ -255,10 +322,11 @@ else:
 # Add some footer information
 st.markdown("---")
 st.caption("""
-Note: This tool provides estimates based on simplified assumptions. 
+Note: This tool provides estimates based on historical data and statistical models. 
 Actual market performance may vary due to many factors including:
 - Individual stock fundamentals
 - Market sentiment
 - Economic conditions
 - Portfolio rebalancing
+- Changes in company-specific risk factors
 """)

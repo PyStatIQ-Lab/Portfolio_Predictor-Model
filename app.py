@@ -312,7 +312,7 @@ if uploaded_file is not None:
             # Get correlation data
             symbols = df['Symbol'].tolist()
             try:
-                prices = yf.download(' '.join(symbols), period=analysis_period)['Adj Close']
+                prices = yf.download(' '.join(symbols), period=analysis_period)['Close']
                 corr = prices.corr()
                 
                 # Plot correlation heatmap

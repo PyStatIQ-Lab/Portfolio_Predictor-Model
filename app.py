@@ -115,6 +115,25 @@ def calculate_portfolio_volatility(volatilities, weights, betas, nsei_volatility
     idiosyncratic_risk = sum((weights[stock] * volatilities[stock])**2 for stock in weights if stock in volatilities)
     return np.sqrt(systematic_risk**2 + idiosyncratic_risk)
 
+def format_numeric_columns(df):
+    """Format numeric columns for display"""
+    format_dict = {
+        'Avg. Cost Price': '{:,.2f}',
+        'LTP': '{:,.2f}',
+        'Invested value': '₹{:,.2f}',
+        'Market Value': '₹{:,.2f}',
+        'Unrealized P&L': '₹{:,.2f}',
+        'Unrealized P&L (%)': '{:.2f}%',
+        'Weight': '{:.2%}'
+    }
+    
+    formatted_df = df.copy()
+    for col, fmt in format_dict.items():
+        if col in formatted_df.columns and pd.api.types.is_numeric_dtype(formatted_df[col]):
+            formatted_df[col] = formatted_df[col].apply(lambda x: fmt.format(x) if not pd.isna(x) else '')
+    
+    return formatted_df
+
 # Main content
 if uploaded_file is not None:
     try:
@@ -206,7 +225,7 @@ if uploaded_file is not None:
                 st.write("### Individual Stock Betas")
                 beta_df = pd.DataFrame.from_dict(betas, orient='index', columns=['Beta'])
                 beta_df['Weight'] = beta_df.index.map(weights)
-                st.dataframe(beta_df.style.format({'Beta': '{:.2f}', 'Weight': '{:.2%}'}))
+                st.dataframe(format_numeric_columns(beta_df), use_container_width=True)
                 
                 # Prediction function with improved model
                 def predict_portfolio_value(target_nsei):
@@ -299,15 +318,7 @@ if uploaded_file is not None:
                 
                 # Show portfolio holdings
                 st.subheader("Your Portfolio Holdings")
-                st.dataframe(df.style.format({
-                    'Avg. Cost Price': '{:.2f}',
-                    'LTP': '{:.2f}',
-                    'Invested value': '₹{:,.2f}',
-                    'Market Value': '₹{:,.2f}',
-                    'Unrealized P&L': '₹{:,.2f}',
-                    'Unrealized P&L (%)': '{:.2f}%',
-                    'Weight': '{:.2%}'
-                }), use_container_width=True)
+                st.dataframe(format_numeric_columns(df), use_container_width=True)
             
             else:
                 st.error("Failed to download historical data. Please try again later.")

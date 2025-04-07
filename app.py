@@ -1,29 +1,31 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
-from scipy.optimize import fsolve
 from io import BytesIO
+from scipy.optimize import fsolve
 
 # Set page config
-st.set_page_config(page_title="Portfolio NSEI Predictor (Validated)", layout="wide")
+st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
 
 # App title
-st.title("✅ Portfolio Performance Predictor (Validated Calculations)")
+st.title("📈 Portfolio Performance Predictor Based on NSEI Levels")
 st.markdown("""
-**Precisely** predict portfolio performance at different NSEI levels with validated calculations.
+Predict how your portfolio will perform at different NSEI (Nifty 50) index levels.
+Upload your portfolio file and enter target NSEI values to see predictions.
 """)
 
 # Sidebar for file upload
 with st.sidebar:
-    st.header("📤 Data Input")
+    st.header("Upload Portfolio Data")
     uploaded_file = st.file_uploader(
-        "Upload portfolio file",
+        "Choose Excel/CSV file with portfolio data",
         type=["csv", "xlsx"],
-        help="Required columns: Symbol, Net Quantity, Avg. Cost Price, LTP, Invested value, Market Value"
+        help="File should contain columns: Symbol, Net Quantity, Avg. Cost Price, LTP, Invested value, Market Value, Unrealized P&L, Unrealized P&L (%)"
     )
     
-    st.header("⚙️ Market Parameters")
+    st.header("Settings")
     current_nsei = st.number_input(
         "Current NSEI Level",
         min_value=1000.0,
@@ -31,209 +33,191 @@ with st.sidebar:
         value=22161.0,
         step=100.0
     )
+    
+    # Sample data download
+    st.markdown("### Need sample data?")
+    sample_data = pd.DataFrame({
+        'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS'],
+        'Net Quantity': [30, 30, 3],
+        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],  # Changed to float
+        'LTP': [575.8, 720.35, 4974.35],
+        'Invested value': [41913.0, 50427.60, 33435.0],  # Changed to float
+        'Market Value': [17274.0, 21610.50, 14923.05],  # Changed to float
+        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],  # Changed to float
+        'Unrealized P&L (%)': [-58.79, -57.15, -55.37]
+    })
+    
+    csv = sample_data.to_csv(index=False).encode('utf-8')
+    st.download_button(
+        label="Download Sample CSV",
+        data=csv,
+        file_name="sample_portfolio.csv",
+        mime="text/csv"
+    )
 
-# Main analysis
+# Main content
 if uploaded_file is not None:
     try:
-        # Read and validate data
+        # Read the uploaded file
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
         
-        # Validate columns
+        # Check required columns
         required_cols = ['Symbol', 'Net Quantity', 'Avg. Cost Price', 'LTP', 
-                        'Invested value', 'Market Value']
-        missing = [col for col in required_cols if col not in df.columns]
-        if missing:
-            st.error(f"Missing columns: {', '.join(missing)}")
+                        'Invested value', 'Market Value', 'Unrealized P&L', 
+                        'Unrealized P&L (%)']
+        
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            st.error(f"Missing required columns: {', '.join(missing)}")
             st.stop()
         
-        # Clean and calculate numeric fields
-        num_cols = ['Avg. Cost Price', 'LTP', 'Invested value', 'Market Value']
+        # Clean data - ensure numerical columns are float type
+        num_cols = ['Avg. Cost Price', 'LTP', 'Invested value', 'Market Value', 'Unrealized P&L']
         for col in num_cols:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce')
+            if col in df.columns:
+                if df[col].dtype == 'object':
+                    df[col] = df[col].astype(str).str.replace(',', '').astype(float)
+                df[col] = df[col].astype(float)
         
-        # Calculate derived fields with validation
-        df['Unrealized P&L'] = df['Market Value'] - df['Invested value']
-        df['Unrealized P&L (%)'] = (df['Unrealized P&L'] / df['Invested value']) * 100
-        
-        # Portfolio metrics with cross-validation
-        portfolio_value = df['Market Value'].sum()
-        invested_value = df['Invested value'].sum()
-        unrealized_pnl = df['Unrealized P&L'].sum()
-        
-        # Validation check
-        if not np.isclose(unrealized_pnl, portfolio_value - invested_value, rtol=0.01):
-            st.warning("P&L validation mismatch - recalculating")
-            unrealized_pnl = portfolio_value - invested_value
-        
+        # Calculate portfolio metrics
+        portfolio_value = float(df['Market Value'].sum())
+        invested_value = float(df['Invested value'].sum())
+        unrealized_pnl = float(df['Unrealized P&L'].sum())
         unrealized_pnl_pct = (unrealized_pnl / invested_value) * 100
         
-        # Display metrics with color coding
-        st.subheader("💰 Portfolio Summary")
-        cols = st.columns(3)
-        cols[0].metric("Current Value", f"₹{portfolio_value:,.2f}")
-        cols[1].metric("Invested Value", f"₹{invested_value:,.2f}")
+        # Display portfolio summary
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Current Portfolio Value", f"₹{portfolio_value:,.2f}")
+        col2.metric("Invested Value", f"₹{invested_value:,.2f}")
+        col3.metric("Unrealized P&L", 
+                   f"₹{unrealized_pnl:,.2f}", 
+                   f"{unrealized_pnl_pct:.2f}%",
+                   delta_color="inverse")
         
-        pnl_color = "inverse" if unrealized_pnl < 0 else "normal"
-        cols[2].metric("Unrealized P&L", 
-                      f"₹{unrealized_pnl:,.2f}", 
-                      f"{unrealized_pnl_pct:.2f}%",
-                      delta_color=pnl_color)
+        # Calculate portfolio beta (simplified approach)
+        st.subheader("Portfolio Sensitivity Analysis")
         
-        # Improved Beta Calculation
-        st.subheader("📈 Sensitivity Analysis")
+        # For beta calculation, we'll assume a relationship based on unrealized P&L%
+        avg_downside = df[df['Unrealized P&L (%)'] < 0]['Unrealized P&L (%)'].mean()
+        portfolio_beta = float(abs(avg_downside / 10))  # Assuming market dropped 10% to reach current P&L
         
-        # Method 1: Using price changes
-        df['Price Change %'] = ((df['LTP'] - df['Avg. Cost Price']) / df['Avg. Cost Price']) * 100
-        market_return_assumption = -10  # Assuming market dropped 10% to current state
-        df['Estimated Beta'] = df['Price Change %'] / market_return_assumption
-        
-        # Weighted portfolio beta
-        df['Weight'] = df['Market Value'] / portfolio_value
-        portfolio_beta = (df['Estimated Beta'] * df['Weight']).sum()
-        
-        # Method 2: Alternative calculation
-        alt_beta = abs(unrealized_pnl_pct / market_return_assumption)
-        
-        # Use average of both methods
-        final_beta = np.mean([portfolio_beta, alt_beta])
-        
-        st.write(f"""
-        **Validated Portfolio Beta**: {final_beta:.2f}
-        - Method 1 (Stock-level): {portfolio_beta:.2f}
-        - Method 2 (Portfolio-level): {alt_beta:.2f}
+        st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
+        st.caption("""
+        Beta measures your portfolio's sensitivity to NSEI movements. 
+        A beta of 1 means your portfolio moves with the market. 
+        Higher beta means more volatile than market.
         """)
         
-        # Prediction function with validation
+        # Prediction function
         def predict_portfolio_value(target_nsei):
-            market_return = ((target_nsei - current_nsei) / current_nsei) * 100
-            portfolio_return = final_beta * market_return
-            predicted_value = portfolio_value * (1 + portfolio_return/100)
-            
-            # Validate calculation
-            if not np.isclose(
-                predicted_value, 
-                portfolio_value + (portfolio_value * (final_beta * (target_nsei - current_nsei)/current_nsei),
-                rtol=0.01
-            ):
-                st.warning("Prediction validation mismatch")
-            
-            predicted_pnl = predicted_value - invested_value
-            predicted_pnl_pct = (predicted_pnl / invested_value) * 100
-            return predicted_value, predicted_pnl, predicted_pnl_pct
+            target_nsei = float(target_nsei)
+            nsei_return_pct = ((target_nsei - current_nsei) / current_nsei) * 100
+            portfolio_return_pct = portfolio_beta * nsei_return_pct
+            predicted_portfolio_value = portfolio_value * (1 + portfolio_return_pct/100)
+            predicted_pnl_pct = ((predicted_portfolio_value - invested_value) / invested_value) * 100
+            return float(predicted_portfolio_value), float(pred_pnl_pct)
         
-        # Accurate Breakeven Calculation
-        def calculate_breakeven():
-            required_return_pct = (-unrealized_pnl_pct) / final_beta
-            breakeven_nsei = current_nsei * (1 + required_return_pct/100)
-            
-            # Verify
-            test_value, _, _ = predict_portfolio_value(breakeven_nsei)
-            if not np.isclose(test_value, invested_value, rtol=0.01):
-                st.error("Breakeven validation failed - using approximation")
-                breakeven_nsei = current_nsei * (1 + (-unrealized_pnl_pct/100)/final_beta
-            
-            return breakeven_nsei
+        # Find breakeven point
+        def breakeven_equation(nsei_level):
+            port_value, _ = predict_portfolio_value(float(nsei_level[0]))
+            return port_value - invested_value
         
-        breakeven_nsei = calculate_breakeven()
-        breakeven_change_pct = ((breakeven_nsei - current_nsei) / current_nsei) * 100
+        # Numerical solution for breakeven
+        breakeven_nsei = float(fsolve(breakeven_equation, current_nsei)[0])
         
-        # Prediction UI
-        st.subheader("🔮 Portfolio Prediction")
-        target_nsei = st.number_input(
-            "Target NSEI Level:", 
-            min_value=1000.0,
-            max_value=50000.0,
-            value=float(round(breakeven_nsei)),
-            step=100.0
-        )
+        # User input for prediction
+        st.subheader("Portfolio Prediction")
         
-        if st.button("Calculate Prediction"):
-            pred_value, pred_pnl, pred_pnl_pct = predict_portfolio_value(target_nsei)
+        col1, col2 = st.columns(2)
+        with col1:
+            target_nsei = st.number_input(
+                "Enter target NSEI level for prediction:",
+                min_value=1000.0,
+                max_value=50000.0,
+                value=float(round(breakeven_nsei)),
+                step=100.0
+            )
+        
+        if st.button("Predict Portfolio Value"):
+            pred_value, pred_pnl = predict_portfolio_value(target_nsei)
             
-            # Display results
-            cols = st.columns(3)
-            cols[0].metric("Predicted Value", f"₹{pred_value:,.2f}")
+            col1, col2 = st.columns(2)
+            col1.metric(
+                f"Predicted Portfolio Value at NSEI {target_nsei:,.0f}",
+                f"₹{pred_value:,.2f}",
+                f"{(pred_value - portfolio_value)/portfolio_value*100:.2f}% from current"
+            )
+            col2.metric(
+                "Predicted Unrealized P&L",
+                f"₹{pred_value - invested_value:,.2f}",
+                f"{pred_pnl:.2f}%",
+                delta_color="inverse" if pred_pnl < 0 else "normal"
+            )
             
-            pnl_color = "inverse" if pred_pnl < 0 else "normal"
-            cols[1].metric("Projected P&L (₹)", f"₹{pred_pnl:,.2f}")
-            cols[2].metric("Projected P&L (%)", f"{pred_pnl_pct:.2f}%", delta_color=pnl_color)
-            
-            # Breakeven analysis
-            st.success(f"""
-            **Breakeven Analysis**:
-            - Breakeven at NSEI: {breakeven_nsei:,.2f}
-            - Required change: {breakeven_change_pct:.2f}%
-            - Verification: At this level, P&L = ₹{pred_value - invested_value:,.2f}
-            """)
+            st.success(f"Your portfolio will break even at NSEI {breakeven_nsei:,.2f} ({(breakeven_nsei - current_nsei)/current_nsei * 100:.2f}% from current)")
         
-        # Visualization with enhanced validation
-        st.subheader("📊 Projection Charts")
-        nsei_range = np.linspace(current_nsei * 0.7, current_nsei * 1.5, 50)
-        values = [predict_portfolio_value(n)[0] for n in nsei_range]
-        pnls = [predict_portfolio_value(n)[2] for n in nsei_range]
+        # Generate predictions for visualization
+        st.subheader("Portfolio Projections")
+        nsei_range = np.linspace(
+            current_nsei * 0.7, 
+            current_nsei * 1.5, 
+            50
+        ).astype(float)
+        predicted_values = [predict_portfolio_value(n)[0] for n in nsei_range]
+        predicted_pnls = [predict_portfolio_value(n)[1] for n in nsei_range]
         
+        # Create figure
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
         
-        # Value plot
-        ax1.plot(nsei_range, values, color='navy')
-        ax1.axvline(current_nsei, color='red', linestyle='--', label='Current')
-        ax1.axhline(invested_value, color='green', linestyle=':', label='Invested')
-        ax1.set_title('Portfolio Value Projection')
+        # Portfolio value plot
+        ax1.plot(nsei_range, predicted_values, color='blue')
+        ax1.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
+        ax1.axhline(y=invested_value, color='green', linestyle='--', label='Invested Value')
+        ax1.set_xlabel('NSEI Level')
+        ax1.set_ylabel('Portfolio Value (₹)')
+        ax1.set_title('Portfolio Value vs NSEI Level')
         ax1.legend()
+        ax1.grid(True)
         
-        # P&L plot
-        ax2.plot(nsei_range, pnls, color='purple')
-        ax2.axvline(current_nsei, color='red', linestyle='--')
-        ax2.axhline(0, color='black', linestyle='-')
-        ax2.set_title('P&L Percentage Projection')
+        # P&L percentage plot
+        ax2.plot(nsei_range, predicted_pnls, color='orange')
+        ax2.axvline(x=current_nsei, color='red', linestyle='--', label='Current NSEI')
+        ax2.axhline(y=0, color='green', linestyle='--', label='Breakeven')
+        ax2.set_xlabel('NSEI Level')
+        ax2.set_ylabel('Unrealized P&L (%)')
+        ax2.set_title('Portfolio P&L % vs NSEI Level')
+        ax2.legend()
+        ax2.grid(True)
         
         st.pyplot(fig)
         
-        # Holdings table with validation
-        st.subheader("📋 Portfolio Holdings (Validated)")
-        df_show = df.copy()
-        df_show['Validation'] = np.isclose(
-            df_show['Unrealized P&L'], 
-            df_show['Market Value'] - df_show['Invested value'],
-            rtol=0.01
-        )
-        
-        st.dataframe(
-            df_show.style.format({
-                'Avg. Cost Price': '{:.2f}',
-                'LTP': '{:.2f}',
-                'Invested value': '₹{:,.2f}',
-                'Market Value': '₹{:,.2f}',
-                'Unrealized P&L': '₹{:,.2f}',
-                'Unrealized P&L (%)': '{:.2f}%',
-                'Estimated Beta': '{:.2f}'
-            }).applymap(
-                lambda x: 'color: red' if isinstance(x, bool) and not x else '',
-                subset=['Validation']
-            ),
-            use_container_width=True
-        )
-        
+        # Show portfolio holdings
+        st.subheader("Your Portfolio Holdings")
+        st.dataframe(df.style.format({
+            'Avg. Cost Price': '{:.2f}',
+            'LTP': '{:.2f}',
+            'Invested value': '₹{:,.2f}',
+            'Market Value': '₹{:,.2f}',
+            'Unrealized P&L': '₹{:,.2f}',
+            'Unrealized P&L (%)': '{:.2f}%'
+        }), use_container_width=True)
+    
     except Exception as e:
-        st.error(f"Calculation error: {str(e)}")
-        st.stop()
+        st.error(f"Error processing file: {str(e)}")
 else:
-    st.info("Please upload portfolio data to begin analysis")
+    st.info("Please upload your portfolio file to get started")
+    st.image("https://via.placeholder.com/800x400?text=Upload+your+portfolio+CSV/Excel+file", use_column_width=True)
 
-# Methodology documentation
+# Add some footer information
 st.markdown("---")
-st.subheader("🧮 Calculation Methodology")
-st.markdown("""
-**All calculations are validated with multiple methods:**
-
-1. **Portfolio Beta**:
-   - Calculated using both stock-level price changes and portfolio-level P&L
-   - Weighted average of individual stock betas by market value
-   - Cross-validated with portfolio-level P&L change
-
-2. **Breakeven Point**:
-   ```python
-   breakeven_nsei = current_nsei × (1 + (-Current P&L%)/β)
+st.caption("""
+Note: This tool provides estimates based on simplified assumptions. 
+Actual market performance may vary due to many factors including:
+- Individual stock fundamentals
+- Market sentiment
+- Economic conditions
+- Portfolio rebalancing
+""")

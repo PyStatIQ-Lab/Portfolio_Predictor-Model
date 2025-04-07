@@ -1,10 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import yfinance as yf
 from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 from io import BytesIO
 from scipy.optimize import fsolve
+import datetime
 
 # Set page config
 st.set_page_config(page_title="Portfolio NSEI Predictor", layout="wide")
@@ -34,16 +36,23 @@ with st.sidebar:
         step=100.0
     )
     
+    # Historical data period
+    lookback_period = st.selectbox(
+        "Historical Data Period",
+        options=["3 months", "6 months", "1 year", "2 years"],
+        index=2
+    )
+    
     # Sample data download
     st.markdown("### Need sample data?")
     sample_data = pd.DataFrame({
         'Symbol': ['STAR.NS', 'ORCHPHARMA.NS', 'APARINDS.NS'],
         'Net Quantity': [30, 30, 3],
-        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],  # Changed to float
+        'Avg. Cost Price': [1397.1, 1680.92, 11145.0],
         'LTP': [575.8, 720.35, 4974.35],
-        'Invested value': [41913.0, 50427.60, 33435.0],  # Changed to float
-        'Market Value': [17274.0, 21610.50, 14923.05],  # Changed to float
-        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],  # Changed to float
+        'Invested value': [41913.0, 50427.60, 33435.0],
+        'Market Value': [17274.0, 21610.50, 14923.05],
+        'Unrealized P&L': [-24639.0, -28817.10, -18511.95],
         'Unrealized P&L (%)': [-58.79, -57.15, -55.37]
     })
     
@@ -54,6 +63,56 @@ with st.sidebar:
         file_name="sample_portfolio.csv",
         mime="text/csv"
     )
+
+# Function to download historical data
+def get_historical_data(symbols, period):
+    period_map = {
+        "3 months": "3mo",
+        "6 months": "6mo",
+        "1 year": "1y",
+        "2 years": "2y"
+    }
+    
+    try:
+        data = yf.download(
+            symbols,
+            period=period_map[period],
+            interval="1d",
+            group_by='ticker'
+        )
+        
+        # For single stock case
+        if len(symbols) == 1:
+            data = {symbols[0]: data}
+        
+        return data
+    except Exception as e:
+        st.error(f"Error downloading data: {str(e)}")
+        return None
+
+# Function to calculate beta and volatility
+def calculate_stock_metrics(stock_data, index_data):
+    # Merge stock and index data
+    merged = pd.merge(
+        stock_data['Adj Close'].rename('Stock'),
+        index_data['Adj Close'].rename('Index'),
+        left_index=True,
+        right_index=True,
+        how='inner'
+    ).dropna()
+    
+    # Calculate daily returns
+    returns = merged.pct_change().dropna()
+    
+    # Calculate beta (covariance with market / variance of market)
+    covariance = np.cov(returns['Stock'], returns['Index'])[0, 1]
+    variance = np.var(returns['Index'])
+    beta = covariance / variance
+    
+    # Calculate volatility (standard deviation of returns)
+    volatility = np.std(returns['Stock']) * np.sqrt(252)  # Annualized
+    
+    return beta, volatility, returns
 
 # Main content
 if uploaded_file is not None:
@@ -97,21 +156,63 @@ if uploaded_file is not None:
                    f"{unrealized_pnl_pct:.2f}%",
                    delta_color="inverse")
         
-        # Calculate portfolio beta (simplified approach)
-        st.subheader("Portfolio Sensitivity Analysis")
+        # Download historical data for stocks and NSEI
+        st.subheader("Calculating Portfolio Beta and Volatility")
+        with st.spinner("Downloading historical data and calculating metrics..."):
+            # Get unique symbols from portfolio
+            symbols = df['Symbol'].unique().tolist()
+            
+            # Download stock data
+            stock_data = get_historical_data(symbols, lookback_period)
+            
+            # Download NSEI data
+            nsei_data = get_historical_data(['^NSEI'], lookback_period)['^NSEI']
+            
+            if stock_data is None or nsei_data is None:
+                st.error("Failed to download historical data. Please try again later.")
+                st.stop()
+            
+            # Calculate beta and volatility for each stock
+            beta_values = []
+            volatility_values = []
+            
+            for symbol in symbols:
+                if symbol in stock_data:
+                    beta, volatility, _ = calculate_stock_metrics(stock_data[symbol], nsei_data)
+                    beta_values.append(beta)
+                    volatility_values.append(volatility)
+                else:
+                    st.warning(f"Could not find data for {symbol}, using default beta of 1")
+                    beta_values.append(1.0)
+                    volatility_values.append(0.3)  # Default volatility
+            
+            # Calculate weighted portfolio beta
+            df['Weight'] = df['Market Value'] / portfolio_value
+            df['Beta'] = beta_values
+            df['Volatility'] = volatility_values
+            portfolio_beta = (df['Weight'] * df['Beta']).sum()
+            
+            # Calculate portfolio volatility (weighted average)
+            portfolio_volatility = (df['Weight'] * df['Volatility']).sum()
         
-        # For beta calculation, we'll assume a relationship based on unrealized P&L%
-        avg_downside = df[df['Unrealized P&L (%)'] < 0]['Unrealized P&L (%)'].mean()
-        portfolio_beta = float(abs(avg_downside / 10))  # Assuming market dropped 10% to reach current P&L
-        
-        st.write(f"Estimated Portfolio Beta: {portfolio_beta:.2f}")
+        # Display portfolio risk metrics
+        st.write(f"Calculated Portfolio Beta: {portfolio_beta:.2f}")
+        st.write(f"Calculated Portfolio Volatility (annualized): {portfolio_volatility:.2%}")
         st.caption("""
-        Beta measures your portfolio's sensitivity to NSEI movements. 
-        A beta of 1 means your portfolio moves with the market. 
-        Higher beta means more volatile than market.
+        - Beta measures your portfolio's sensitivity to NSEI movements. 
+        - Volatility measures how much your portfolio's returns fluctuate over time.
         """)
         
-        # Prediction function
+        # Show stock-level metrics
+        st.subheader("Stock-Level Risk Metrics")
+        st.dataframe(df[['Symbol', 'Market Value', 'Weight', 'Beta', 'Volatility']].style.format({
+            'Market Value': '₹{:,.2f}',
+            'Weight': '{:.2%}',
+            'Beta': '{:.2f}',
+            'Volatility': '{:.2%}'
+        }), use_container_width=True)
+        
+        # Prediction function using accurate beta
         def predict_portfolio_value(target_nsei):
             target_nsei = float(target_nsei)
             nsei_return_pct = ((target_nsei - current_nsei) / current_nsei) * 100
@@ -194,15 +295,18 @@ if uploaded_file is not None:
         
         st.pyplot(fig)
         
-        # Show portfolio holdings
-        st.subheader("Your Portfolio Holdings")
+        # Show portfolio holdings with risk metrics
+        st.subheader("Your Portfolio Holdings with Risk Metrics")
         st.dataframe(df.style.format({
             'Avg. Cost Price': '{:.2f}',
             'LTP': '{:.2f}',
             'Invested value': '₹{:,.2f}',
             'Market Value': '₹{:,.2f}',
             'Unrealized P&L': '₹{:,.2f}',
-            'Unrealized P&L (%)': '{:.2f}%'
+            'Unrealized P&L (%)': '{:.2f}%',
+            'Weight': '{:.2%}',
+            'Beta': '{:.2f}',
+            'Volatility': '{:.2%}'
         }), use_container_width=True)
     
     except Exception as e:
@@ -214,10 +318,13 @@ else:
 # Add some footer information
 st.markdown("---")
 st.caption("""
-Note: This tool provides estimates based on simplified assumptions. 
+Note: This tool provides estimates based on historical beta calculations. 
 Actual market performance may vary due to many factors including:
-- Individual stock fundamentals
-- Market sentiment
+- Changes in individual stock fundamentals
+- Market sentiment shifts
 - Economic conditions
 - Portfolio rebalancing
+- Changes in stock betas over time
+
+Beta is calculated using historical price data and may not predict future sensitivity accurately.
 """)

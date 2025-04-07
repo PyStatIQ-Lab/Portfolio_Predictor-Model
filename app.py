@@ -59,18 +59,19 @@ with st.sidebar:
 # Function to fetch historical data and calculate beta and volatility
 def get_stock_data(symbols, index_symbol="^NSEI", period="1y"):
     # Fetch Nifty 50 data
-    index_data = yf.download(index_symbol, period=period)['Close']
+    index_data = yf.download(index_symbol, period=period)['Adj Close']
     
     # Fetch stock data
     stock_data = {}
     for symbol in symbols:
-        stock_data[symbol] = yf.download(symbol, period=period)['Close']
+        stock_data[symbol] = yf.download(symbol, period=period)['Adj Close']
     
-    # Calculate daily returns
-    index_returns = index_data.pct_change().dropna()
-    stock_returns = {symbol: stock_data[symbol].pct_change().dropna() for symbol in symbols}
+    # Align stock and index data by date
+    aligned_data = {}
+    for symbol, stock_df in stock_data.items():
+        aligned_data[symbol] = pd.concat([stock_df, index_data], axis=1).dropna()
     
-    return stock_returns, index_returns
+    return aligned_data
 
 # Main content
 if uploaded_file is not None:
@@ -115,17 +116,26 @@ if uploaded_file is not None:
         
         # Fetch stock data and calculate beta & volatility
         symbols = df['Symbol'].tolist()
-        stock_returns, index_returns = get_stock_data(symbols)
+        aligned_data = get_stock_data(symbols)
         
         # Calculate Beta and Volatility for each stock
         betas = {}
         volatilities = {}
-        for symbol in symbols:
-            stock_return = stock_returns[symbol]
-            covariance = np.cov(stock_return, index_returns)[0, 1]
+        for symbol, data in aligned_data.items():
+            stock_returns = data[symbol].pct_change().dropna()
+            index_returns = data['^NSEI'].pct_change().dropna()
+
+            # Ensure both series are of same length
+            min_len = min(len(stock_returns), len(index_returns))
+            stock_returns = stock_returns[:min_len]
+            index_returns = index_returns[:min_len]
+            
+            # Calculate beta and volatility
+            covariance = np.cov(stock_returns, index_returns)[0, 1]
             index_variance = np.var(index_returns)
             beta = covariance / index_variance
-            volatility = np.std(stock_return)
+            volatility = np.std(stock_returns)
+            
             betas[symbol] = beta
             volatilities[symbol] = volatility
         

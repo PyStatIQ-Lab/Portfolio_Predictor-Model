@@ -118,7 +118,7 @@ if uploaded_file is not None:
             start_date = end_date - timedelta(days=historical_days)
             
             # Get NSEI data
-            nsei = yf.download("^NSEI", start=start_date, end=end_date)['Adj Close']
+            nsei = yf.download("^NSEI", start=start_date, end=end_date)['Close']
             nsei_returns = nsei.pct_change().dropna()
             
             # Get portfolio constituents data

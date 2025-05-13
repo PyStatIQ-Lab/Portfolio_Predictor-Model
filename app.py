@@ -233,7 +233,7 @@ if not st.session_state.portfolio_df.empty:
         start_date = end_date - timedelta(days=365)  # 1 year data
         
         # Download NSEI data
-        nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Adj Close']
+        nsei_data = yf.download('^NSEI', start=start_date, end=end_date)['Close']
         nsei_returns = nsei_data.pct_change().dropna()
         
         # Download stock data and calculate beta for each stock
@@ -242,7 +242,7 @@ if not st.session_state.portfolio_df.empty:
         
         for _, row in df.iterrows():
             try:
-                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+                stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
                 stock_returns = stock_data.pct_change().dropna()
                 
                 # Align dates between stock and market returns
@@ -270,7 +270,7 @@ if not st.session_state.portfolio_df.empty:
             portfolio_returns = []
             for _, row in df.iterrows():
                 try:
-                    stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Adj Close']
+                    stock_data = yf.download(row['Symbol'], start=start_date, end=end_date)['Close']
                     stock_returns = stock_data.pct_change().dropna()
                     common_dates = nsei_returns.index.intersection(stock_returns.index)
                     aligned_stock = stock_returns[common_dates]
